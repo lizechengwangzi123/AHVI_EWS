@@ -65,7 +65,7 @@ if df is not None and geojson is not None:
     # --- Data Cleaning & Pre-calculation ---
     name_mapping = {
         "Kuala Lumpur": "KualaLumpur", "W.P. Putrajaya": "Putrajaya", "W.P. Labuan": "Labuan",
-        "Pulau Pinang": "Pahang", "Negeri Sembilan": "NegeriSembilan", "Terengganu": "Trengganu"
+        "Pulau Pinang": "Panang", "Negeri Sembilan": "NegeriSembilan", "Terengganu": "Trengganu"
     }
     df['district_id'] = df['district_id'].replace(name_mapping)
     df = df.sort_values(by="risk_factor_score", ascending=False).reset_index(drop=True)
