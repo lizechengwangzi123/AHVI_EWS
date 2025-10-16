@@ -60,7 +60,7 @@ def assign_risk_level_single(predicted_outcome, thresholds):
 # --- Main App Logic ---
 st.title("🔬 AI-Enhanced Heat Vulnerability Index+ EWS & Research Dashboard")
 st.sidebar.markdown("---")
-st.sidebar.markdown("**EHVI+ Early Warning System**")
+st.sidebar.markdown("**AHVI+ Early Warning System**")
 st.sidebar.markdown("*AI-Powered by Google Gemini*")
 st.sidebar.markdown("Developed by Zecheng Li")
 
