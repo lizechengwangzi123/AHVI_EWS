@@ -118,7 +118,7 @@ if df is not None and geojson is not None:
                 receiver_email = "23053789@siswa.um.edu.my"
 
                 # --- Construct the email ---
-                subject = "Feedback from AI Heat-Health Dashboard"
+                subject = "Feedback from AHVI+ EWS Dashboard"
                 body = f"User Feedback:\n\n{feedback_text}"
                 message = f"Subject: {subject}\n\n{body}"
 
