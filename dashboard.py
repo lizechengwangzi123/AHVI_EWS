@@ -309,12 +309,12 @@ if df is not None and geojson is not None:
                 """ # Note: prompt is truncated for brevity but remains the same in your code
                 with st.spinner("🧠 Gemini is analyzing data..."):
                     try:
-                        model = genai.GenerativeModel('gemini-1.5-flash-latest')
+                        model = genai.GenerativeModel('gemini-2.5-flash')
                         response = model.generate_content(prompt)
                         st.markdown(response.text)
                     except Exception:
                         try:
-                            model = genai.GenerativeModel('gemini-pro')
+                            model = genai.GenerativeModel('gemini-2.5-pro')
                             response = model.generate_content(prompt)
                             st.markdown(response.text)
                         except Exception as e:
