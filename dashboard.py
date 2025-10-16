@@ -203,12 +203,12 @@ if df is not None and geojson is not None:
             with sim_col1:
                 utci_change = st.slider(
                     "Simulate Change in UTCI (°C) (e.g., Cooling Policies)",
-                    min_value=-5.0, max_value=2.0, value=0.0, step=0.1, key="sim_utci"
+                    min_value=-50.0, max_value=50.0, value=0.0, step=0.1, key="sim_utci"
                 )
             with sim_col2:
                 pm25_change_percent = st.slider(
                     "Simulate Change in PM2.5 (%) (e.g., Pollution Control)",
-                    min_value=-50, max_value=20, value=0, step=5, key="sim_pm25"
+                    min_value=-80, max_value=80, value=0, step=5, key="sim_pm25"
                 )
             simulated_data = district_data[risk_features].to_frame().T
             original_outcome = district_data['predicted_outcome']
