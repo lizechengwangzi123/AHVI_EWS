@@ -57,7 +57,10 @@ def assign_risk_level_single(predicted_outcome, thresholds):
 
 # --- Main App Logic ---
 st.title("🔬 AI-Enhanced Heat-Health EWS & Research Dashboard")
-st.markdown("Powered by Google Gemini")
+st.sidebar.markdown("---")
+st.sidebar.markdown("**EHVI+ Early Warning System**")
+st.sidebar.markdown("*AI-Powered by Google Gemini*")
+st.sidebar.markdown("Developed by Zecheng Li")
 
 df, geojson = load_data("risk_assessment_final.csv", "malaysia_states.json")
 
