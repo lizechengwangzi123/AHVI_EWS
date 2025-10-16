@@ -322,8 +322,31 @@ if df is not None and geojson is not None:
                     else:
                         with st.spinner("🧠 Gemini is generating policy recommendations based on your input..."):
                             prompt = f"""
-                            You are an expert public health advisor...
-                            """ # Note: prompt is truncated for brevity but remains the same in your code
+                            You are an expert public health advisor specializing in climate change and heat-related illnesses in Southeast Asia.
+                            Your task is to provide a concise, actionable policy recommendation based on the following data for the new scenario at {district_name_input}.
+
+                            **Current Risk Assessment Data:**
+                            - **Overall Risk Level:** {risk_label}
+                            - **Predicted Health Outcome (e.g., excess cases):** {predicted_outcome:.2f}
+
+                            **Key Contributing Factors:**
+                            - **Heat Vulnerability Index (HVI_Score):** {hvi_input}
+                            - **Mean UTCI (Thermal Comfort):** {utci_input} °C
+                            - **Mean PM2.5 (Air Pollution):** {pm25_input} µg/m³
+                            - **95th Percentile Ozone (O3_q95):** {o3_input} µg/m³
+
+                            **Instructions:**
+                            Based on the data above, please generate a report with the following structure, using Markdown formatting:
+
+                            ### 1. Risk Summary
+                            Provide a brief, easy-to-understand summary of the current heat-health risk for this scenario.
+
+                            ### 2. Primary Drivers
+                            Identify the top 1-2 factors that are most likely contributing to the elevated risk level.
+
+                            ### 3. Actionable Recommendations
+                            Suggest 3-4 specific, actionable, and targeted recommendations for local authorities. Tailor the advice to the primary drivers you identified. For example, if HVI is high, suggest focusing on vulnerable populations. If air pollution is high, suggest public health advisories about outdoor activity.
+                            """
                             try:
                                 model = genai.GenerativeModel('gemini-2.5-flash')
                                 response = model.generate_content(prompt)
@@ -341,8 +364,32 @@ if df is not None and geojson is not None:
             if st.button(f"Generate Recommendations for {selected_district}"):
                 district_data = df[df['district_id'] == selected_district].iloc[0]
                 prompt = f"""
-                You are an expert public health advisor...
-                """ # Note: prompt is truncated for brevity but remains the same in your code
+                You are an expert public health advisor specializing in climate change and heat-related illnesses in Southeast Asia.
+                Your task is to provide a concise, actionable policy recommendation based on the following data for the district of {selected_district}, Malaysia.
+
+                **Current Risk Assessment Data:**
+                - **Overall Risk Level:** {district_data['risk_level']}
+                - **Risk Factor Score:** {district_data['risk_factor_score']:.2f}
+                - **Predicted Health Outcome (e.g., excess cases):** {district_data['predicted_outcome']:.2f}
+
+                **Key Contributing Factors:**
+                - **Heat Vulnerability Index (HVI_Score):** {district_data.get('HVI_Score', 'N/A')}
+                - **Mean UTCI (Thermal Comfort):** {district_data.get('UTCI_mean', 'N/A')} °C
+                - **Mean PM2.5 (Air Pollution):** {district_data.get('PM25_mean', 'N/A')} µg/m³
+                - **95th Percentile Ozone (O3_q95):** {district_data.get('O3_q95', 'N/A')} µg/m³
+
+                **Instructions:**
+                Based on the data above, please generate a report with the following structure, using Markdown formatting:
+
+                ### 1. Risk Summary
+                Provide a brief, easy-to-understand summary of the current heat-health risk for {selected_district}.
+
+                ### 2. Primary Drivers
+                Identify the top 1-2 factors that are most likely contributing to the elevated risk level.
+
+                ### 3. Actionable Recommendations
+                Suggest 3-4 specific, actionable, and targeted recommendations for local authorities. Tailor the advice to the primary drivers you identified. For example, if HVI is high, suggest focusing on vulnerable populations. If air pollution is high, suggest public health advisories about outdoor activity.
+                """
                 with st.spinner("🧠 Gemini is analyzing data..."):
                     try:
                         model = genai.GenerativeModel('gemini-2.5-flash')
