@@ -5,6 +5,8 @@ import json
 import google.generativeai as genai
 import joblib
 import numpy as np
+import smtplib # Added for sending email
+import ssl # Added for sending email
 
 # --- Page Configuration ---
 st.set_page_config(
@@ -101,6 +103,42 @@ if df is not None and geojson is not None:
         file_name=f'heat_risk_data_{pd.Timestamp.now().strftime("%Y%m%d")}.csv', mime='text/csv'
     )
 
+    # ==================== NEW FEEDBACK FUNCTION START ====================
+    st.sidebar.markdown("---")
+    st.sidebar.subheader("✉️ Provide Feedback")
+
+    feedback_text = st.sidebar.text_area("Share your feedback or report a bug:")
+
+    if st.sidebar.button("Send Feedback"):
+        if feedback_text:
+            try:
+                # --- Get credentials from secrets ---
+                sender_email = st.secrets["email_credentials"]["sender_email"]
+                password = st.secrets["email_credentials"]["sender_password"]
+                receiver_email = "23053789@siswa.um.edu.my"
+
+                # --- Construct the email ---
+                subject = "Feedback from AI Heat-Health Dashboard"
+                body = f"User Feedback:\n\n{feedback_text}"
+                message = f"Subject: {subject}\n\n{body}"
+
+                # --- Send the email ---
+                context = ssl.create_default_context()
+                with smtplib.SMTP_SSL("smtp.gmail.com", 465, context=context) as server:
+                    server.login(sender_email, password)
+                    server.sendmail(sender_email, receiver_email, message.encode('utf-8'))
+                
+                st.sidebar.success("Thank you! Your feedback has been sent successfully.")
+            
+            except KeyError:
+                st.sidebar.error("Email credentials are not configured in the app's secrets.")
+            except Exception as e:
+                st.sidebar.error(f"Failed to send feedback. Error: {e}")
+        else:
+            st.sidebar.warning("Please enter your feedback before sending.")
+    # ===================== NEW FEEDBACK FUNCTION END =====================
+
+
     # --- Main content area with tabs ---
     tab_list = [
         "📍 Overview & Map", 
@@ -111,8 +149,6 @@ if df is not None and geojson is not None:
     ]
     
     # --- FIX 1: Replace st.tabs with a stateful st.radio to act as tabs ---
-    # We use st.radio styled horizontally, and its state is stored in session_state,
-    # which persists across reruns. This prevents it from resetting to the first tab.
     if 'active_tab' not in st.session_state:
         st.session_state.active_tab = tab_list[0] # Set default tab
 
@@ -322,4 +358,3 @@ if df is not None and geojson is not None:
 
 else:
     st.error("Error loading data. Please check your file paths.")
-
