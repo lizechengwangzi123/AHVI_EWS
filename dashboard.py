@@ -11,6 +11,9 @@ import pickle
 # [NEW] 必须导入这些库，否则无法读取模型文件
 import statsmodels.api as sm 
 import xgboost as xgb
+# [NEW] 地理编码库，用于搜索全球城市
+from geopy.geocoders import Nominatim 
+from geopy.exc import GeocoderTimedOut
 
 from sklearn.preprocessing import StandardScaler 
 from sklearn.decomposition import PCA 
@@ -390,7 +393,8 @@ if df is not None and geojson is not None:
         if analysis_type == "Extreme Heat Days":
             c_ehd1, c_ehd2 = st.columns(2)
             with c_ehd1:
-                pred_inputs['HVI_Score'] = st.number_input("EHD-HVI", format="%.4f")
+                # [UPDATE] Label updated to imply raw, standardization happens internally
+                pred_inputs['HVI_Score'] = st.number_input("EHD-HVI (Raw Value)", format="%.4f")
             with c_ehd2:
                 pred_inputs['City'] = st.text_input("City Name (English)")
                 
@@ -398,7 +402,7 @@ if df is not None and geojson is not None:
             c_ovi1, c_ovi2 = st.columns(2)
             c_ovi3, c_ovi4 = st.columns(2)
             with c_ovi1:
-                pred_inputs['HVI_Score'] = st.number_input("Traditional HVI", format="%.4f")
+                pred_inputs['HVI_Score'] = st.number_input("Traditional HVI (Raw Value)", format="%.4f")
             with c_ovi2:
                 pred_inputs['EHD'] = st.number_input("Extreme Heat Days (Int)", min_value=0, step=1, format="%d")
             with c_ovi3:
@@ -406,20 +410,13 @@ if df is not None and geojson is not None:
             with c_ovi4:
                 pred_inputs['City'] = st.text_input("City Name (English)")
 
-        # Map Placeholder (Default KL)
+        # [UPDATED] Map Logic with Global Geocoding Support
+        # Default coords dictionary (Fallback)
         city_coords = {
             "Kuala Lumpur": {"lat": 3.1390, "lon": 101.6869},
             "Penang": {"lat": 5.4141, "lon": 100.3288},
             "George Town": {"lat": 5.4141, "lon": 100.3288},
-            "Johor Bahru": {"lat": 1.4927, "lon": 103.7414},
-            "Kuching": {"lat": 1.5533, "lon": 110.3592},
-            "Kota Kinabalu": {"lat": 5.9804, "lon": 116.0735},
-            "Ipoh": {"lat": 4.5975, "lon": 101.0901},
-            "Shah Alam": {"lat": 3.0738, "lon": 101.5183},
-            "Petaling Jaya": {"lat": 3.1073, "lon": 101.6067},
-            "Melaka": {"lat": 2.1896, "lon": 102.2501},
-            "Alor Setar": {"lat": 6.1248, "lon": 100.3678},
-            "Kuantan": {"lat": 3.8077, "lon": 103.3260}
+            "Johor Bahru": {"lat": 1.4927, "lon": 103.7414}
         }
 
         map_center = {"lat": 3.1390, "lon": 101.6869} # Default KL
@@ -427,16 +424,30 @@ if df is not None and geojson is not None:
         target_city = pred_inputs.get('City', '').strip()
         
         if target_city:
+            # 1. Check hardcoded dict first (Faster)
             found = False
             for k, v in city_coords.items():
                 if k.lower() == target_city.lower():
                     map_center = v
                     found = True
                     break
+            
+            # 2. If not found, use Geopy to search globally
             if not found:
-                st.caption(f"⚠️ City '{target_city}' not in demo database. Map remaining at default.")
-            else:
-                st.caption(f"📍 Map centered on {target_city}")
+                try:
+                    geolocator = Nominatim(user_agent="heat_dashboard_app")
+                    location = geolocator.geocode(target_city, timeout=5)
+                    if location:
+                        map_center = {"lat": location.latitude, "lon": location.longitude}
+                        found = True
+                        st.caption(f"📍 Found location via Geocoder: {location.address}")
+                    else:
+                        st.caption(f"⚠️ City '{target_city}' not found globally. Map remaining at default.")
+                except Exception as e:
+                    st.caption(f"⚠️ Geocoding service error: {e}. Map remaining at default.")
+
+            if found and not 'location' in locals(): # Just to show caption for dict hits
+                st.caption(f"📍 Map centered on {target_city} (Database)")
 
         st.markdown(f"**Map Visualization: {target_city if target_city else 'Kuala Lumpur'}**")
         map_df = pd.DataFrame([{'lat': map_center['lat'], 'lon': map_center['lon'], 'City': target_city if target_city else "Kuala Lumpur"}])
@@ -448,13 +459,39 @@ if df is not None and geojson is not None:
         if st.button("Predict Mortality & Risk Level"):
             mortality_pred = None
             
+            # --- [UPDATED] Standardization Logic ---
+            # Retrieve HVI statistics from the loaded dataset (df)
+            if 'HVI_Score' in df.columns:
+                hvi_mean = df['HVI_Score'].mean()
+                hvi_std = df['HVI_Score'].std()
+            else:
+                hvi_mean, hvi_std = 0, 1 # Fallback, though unlikely if csv loaded
+            
+            # Standardize HVI Input
+            # Formula: Z = (X - mean) / std
+            raw_hvi = pred_inputs.get('HVI_Score', 0)
+            if hvi_std != 0:
+                hvi_std_val = (raw_hvi - hvi_mean) / hvi_std
+            else:
+                hvi_std_val = raw_hvi
+            
+            # Note for EHD/OVI:
+            # Since 'EHD' and 'OVI' columns do not exist in risk_assessment_final.csv,
+            # we cannot calculate their mean/std for standardization.
+            # We will use the raw values but warn the user. 
+            # Ideally, these should also be standardized if the training data was.
+            
+            st.info(f"ℹ️ Input Processing: HVI standardized (Raw: {raw_hvi} -> Std: {hvi_std_val:.4f}) based on historical data.")
+            if analysis_type == "Organizational Vulnerability Index":
+                st.caption("Note: EHD and OVI inputs are passed without standardization as reference statistics are unavailable in current dataset.")
+
             # --- Prediction Logic (Updated for Custom Classes) ---
             if analysis_type == "Extreme Heat Days":
                 if article_models['article5']:
                     try:
                         # Article 5 (NB2Predictor) uses: .predict(hvi_value=...)
-                        # 不需要构造 array，直接传参数
-                        mortality_pred = article_models['article5'].predict(hvi_value=pred_inputs['HVI_Score'])
+                        # Use STANDARDIZED HVI
+                        mortality_pred = article_models['article5'].predict(hvi_value=hvi_std_val)
                     except Exception as e:
                         st.error(f"Prediction Error (Article 5 Model): {e}")
                 else:
@@ -464,10 +501,10 @@ if df is not None and geojson is not None:
                 if article_models['article6']:
                     try:
                         # Article 6 (SimplePredictor) uses: .predict(EHD=, HVI_Score=, OVI=)
-                        # 不需要构造 array，直接传参数
+                        # Use STANDARDIZED HVI
                         mortality_pred = article_models['article6'].predict(
                             EHD=pred_inputs['EHD'], 
-                            HVI_Score=pred_inputs['HVI_Score'], 
+                            HVI_Score=hvi_std_val, 
                             OVI=pred_inputs['OVI']
                         )
                     except Exception as e:
@@ -484,6 +521,11 @@ if df is not None and geojson is not None:
                 q90 = baseline_mortality.quantile(0.9)
                 q75 = baseline_mortality.quantile(0.75)
                 q50 = baseline_mortality.quantile(0.5)
+                
+                # Debug info to understand why risk level is chosen
+                with st.expander("Show Risk Threshold Details"):
+                    st.write(f"Thresholds (from historical data): Q90={q90:.2f}, Q75={q75:.2f}, Q50={q50:.2f}")
+                    st.write(f"Your Prediction: {mortality_pred:.2f}")
                 
                 risk_level_final = "GREEN"
                 if mortality_pred > q90:
