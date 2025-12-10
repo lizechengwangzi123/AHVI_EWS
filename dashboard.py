@@ -10,7 +10,115 @@ import ssl
 import pickle # [NEW] For loading .pkl models
 from sklearn.preprocessing import StandardScaler # [NEW] For HVI Calc
 from sklearn.decomposition import PCA # [NEW] For HVI Calc
+# ================= 第一个预测器类 =================
+class SimplePredictor:
+    def __init__(self, model_path, config_path):
+        self.model = joblib.load(model_path)
+        with open(config_path, "r") as f:
+            self.config = json.load(f)
+    
+    def predict(self, EHD=None, HVI_Score=None, OVI=None):
+        """
+        只用3个核心特征预测，其他特征自动设为默认值
+        """
+        # 创建特征向量（使用默认值）
+        features = np.zeros(len(self.config['feature_order']))
+        
+        # 设置默认值
+        for i, feat in enumerate(self.config['feature_order']):
+            if feat in self.config['default_values']:
+                features[i] = self.config['default_values'][feat]
+        
+        # 设置用户输入的3个特征
+        feat_dict = {'EHD': EHD, 'HVI_Score': HVI_Score, 'OVI': OVI}
+        for feat_name, value in feat_dict.items():
+            if value is not None and feat_name in self.config['feature_order']:
+                idx = self.config['feature_order'].index(feat_name)
+                features[idx] = value
+        
+        # 预测
+        return self.model.predict([features])[0]
 
+# ================= 第二个预测器类 =================
+class NB2Predictor:
+    """NB2模型预测器 - 只需输入HVI值"""
+    
+    def __init__(self):
+        # 从保存的文件加载模型
+        self.model = joblib.load("article5_model.pkl")
+        with open("best_model_details.json", "r") as f:
+            self.info = json.load(f)
+        
+        # 固定默认值（基于你的输出）
+        self.default_month = 6  # 默认6月
+        self.default_time_index = 100  # 默认时间趋势
+        self.default_shock_2021_10 = 0  # 默认非异常月
+        self.default_shock_2022_03 = 0  # 默认非异常月
+        
+        # 特征顺序（非常重要！）
+        self.feature_order = self.info['features']
+        
+        print(f"✅ 预测器初始化完成")
+        print(f"   特征数: {len(self.feature_order)}")
+        print(f"   默认月份: {self.default_month}月")
+        print(f"   时间趋势: {self.default_time_index}")
+    
+    def create_feature_vector(self, hvi_value, month=None, time_index=None):
+        """创建特征向量"""
+        # 使用默认值或用户指定值
+        month = month if month is not None else self.default_month
+        time_index = time_index if time_index is not None else self.default_time_index
+        
+        # 初始化所有特征为0
+        features = {feat: 0.0 for feat in self.feature_order}
+        
+        # 设置固定特征
+        features['Intercept'] = 1.0
+        features['HVI_LST_EHD_EQ'] = hvi_value
+        features['time_index'] = time_index
+        features['alpha'] = 0.002232  # 从你的输出中复制
+        features['shock_2021_10'] = self.default_shock_2021_10
+        features['shock_2022_03'] = self.default_shock_2022_03
+        
+        # 设置月份虚拟变量（one-hot编码）
+        # 注意：1月是基准月，所以没有C(month)[T.1]
+        for i in range(2, 13):
+            month_col = f'C(month)[T.{i}]'
+            if month_col in features:
+                features[month_col] = 1.0 if i == month else 0.0
+        
+        return features
+    
+    def predict(self, hvi_value, month=None, time_index=None):
+        """预测函数 - 只需输入HVI值"""
+        # 创建特征向量
+        features = self.create_feature_vector(hvi_value, month, time_index)
+        
+        # 按顺序转换为数组
+        X = np.array([[features[feat] for feat in self.feature_order]])
+        
+        # 预测
+        return float(self.model.predict(X)[0])
+    
+    def batch_predict(self, hvi_values, months=None, time_indices=None):
+        """批量预测"""
+        if months is None:
+            months = [self.default_month] * len(hvi_values)
+        if time_indices is None:
+            time_indices = [self.default_time_index] * len(hvi_values)
+        
+        results = []
+        for hvi, month, time_idx in zip(hvi_values, months, time_indices):
+            results.append(self.predict(hvi, month, time_idx))
+        
+        return results
+    
+    def get_feature_importance(self):
+        """获取特征重要性（系数绝对值）"""
+        return {
+            feat: abs(coef) 
+            for feat, coef in self.info['coefficients'].items()
+        }
 # --- Page Configuration ---
 st.set_page_config(
     page_title="AHVI+ EWS & Research Dashboard",
