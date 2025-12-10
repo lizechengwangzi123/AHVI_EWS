@@ -8,6 +8,10 @@ import numpy as np
 import smtplib 
 import ssl 
 import pickle 
+# [NEW] 必须导入这些库，否则无法读取模型文件
+import statsmodels.api as sm 
+import xgboost as xgb
+
 from sklearn.preprocessing import StandardScaler 
 from sklearn.decomposition import PCA 
 
@@ -49,18 +53,18 @@ class NB2Predictor:
     
     def __init__(self):
         # 从保存的文件加载模型
-        # 注意：如果是从 pickle 加载实例，__init__ 不会被调用，所以这里的文件路径不会报错
+        # 注意：如果是从 pickle 加载实例，__init__ 不会被调用
         self.model = joblib.load("article5_model.pkl")
         with open("best_model_details.json", "r") as f:
             self.info = json.load(f)
         
-        # 固定默认值（基于你的输出）
+        # 固定默认值
         self.default_month = 6  # 默认6月
         self.default_time_index = 100  # 默认时间趋势
         self.default_shock_2021_10 = 0  # 默认非异常月
         self.default_shock_2022_03 = 0  # 默认非异常月
         
-        # 特征顺序（非常重要！）
+        # 特征顺序
         self.feature_order = self.info['features']
     
     def create_feature_vector(self, hvi_value, month=None, time_index=None):
@@ -76,12 +80,11 @@ class NB2Predictor:
         features['Intercept'] = 1.0
         features['HVI_LST_EHD_EQ'] = hvi_value
         features['time_index'] = time_index
-        features['alpha'] = 0.002232  # 从你的输出中复制
+        features['alpha'] = 0.002232  
         features['shock_2021_10'] = self.default_shock_2021_10
         features['shock_2022_03'] = self.default_shock_2022_03
         
         # 设置月份虚拟变量（one-hot编码）
-        # 注意：1月是基准月，所以没有C(month)[T.1]
         for i in range(2, 13):
             month_col = f'C(month)[T.{i}]'
             if month_col in features:
@@ -114,7 +117,7 @@ class NB2Predictor:
         return results
     
     def get_feature_importance(self):
-        """获取特征重要性（系数绝对值）"""
+        """获取特征重要性"""
         return {
             feat: abs(coef) 
             for feat, coef in self.info['coefficients'].items()

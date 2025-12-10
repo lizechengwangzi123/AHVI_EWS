@@ -4,3 +4,5 @@ plotly
 google-generativeai
 scikit-learn
 numpy
+statsmodels
+xgboost
