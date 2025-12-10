@@ -7,10 +7,15 @@ import joblib
 import numpy as np
 import smtplib 
 import ssl 
-import pickle # [NEW] For loading .pkl models
-from sklearn.preprocessing import StandardScaler # [NEW] For HVI Calc
-from sklearn.decomposition import PCA # [NEW] For HVI Calc
-# ================= 第一个预测器类 =================
+import pickle 
+from sklearn.preprocessing import StandardScaler 
+from sklearn.decomposition import PCA 
+
+# ==============================================================================
+# [CRITICAL] 用户自定义预测器类定义
+# 必须放在 load 之前，否则 pickle 无法识别对象
+# ==============================================================================
+
 class SimplePredictor:
     def __init__(self, model_path, config_path):
         self.model = joblib.load(model_path)
@@ -39,12 +44,12 @@ class SimplePredictor:
         # 预测
         return self.model.predict([features])[0]
 
-# ================= 第二个预测器类 =================
 class NB2Predictor:
     """NB2模型预测器 - 只需输入HVI值"""
     
     def __init__(self):
         # 从保存的文件加载模型
+        # 注意：如果是从 pickle 加载实例，__init__ 不会被调用，所以这里的文件路径不会报错
         self.model = joblib.load("article5_model.pkl")
         with open("best_model_details.json", "r") as f:
             self.info = json.load(f)
@@ -57,11 +62,6 @@ class NB2Predictor:
         
         # 特征顺序（非常重要！）
         self.feature_order = self.info['features']
-        
-        print(f"✅ 预测器初始化完成")
-        print(f"   特征数: {len(self.feature_order)}")
-        print(f"   默认月份: {self.default_month}月")
-        print(f"   时间趋势: {self.default_time_index}")
     
     def create_feature_vector(self, hvi_value, month=None, time_index=None):
         """创建特征向量"""
@@ -119,6 +119,9 @@ class NB2Predictor:
             feat: abs(coef) 
             for feat, coef in self.info['coefficients'].items()
         }
+
+# ==============================================================================
+
 # --- Page Configuration ---
 st.set_page_config(
     page_title="AHVI+ EWS & Research Dashboard",
@@ -137,28 +140,22 @@ def load_risk_model(model_path):
 
 risk_model = load_risk_model('champion_model_pipeline.joblib')
 
-# [UPDATED] Loaders for the new article predictors
-# 使用 joblib 替代 pickle，通常对 sklearn 模型兼容性更好
-# 增加了 try-except 块，防止因模型文件损坏或版本问题导致整个 App 崩溃
+# [UPDATED] Loaders with robust error handling
 @st.cache_resource
 def load_article_models():
     models = {}
     
     def load_safe(path):
         try:
-            # 尝试优先使用 joblib 加载 (通常比 pickle 更健壮)
+            # First try joblib
             return joblib.load(path)
-        except FileNotFoundError:
-            st.warning(f"⚠️ 文件未找到: {path}")
-            return None
-        except Exception as e:
-            # 如果 joblib 失败，尝试回退到 pickle
+        except:
             try:
+                # Fallback to pickle
                 with open(path, 'rb') as f:
                     return pickle.load(f)
-            except Exception as e2:
-                # 如果都失败了，打印错误但不阻断 App 运行
-                st.error(f"❌ 无法加载模型 {path}。可能是版本不兼容或缺少类定义。\n详细错误: {e}")
+            except Exception as e:
+                st.error(f"❌ Failed to load {path}. Error: {e}")
                 return None
 
     models['article5'] = load_safe('article5_predictor.pkl')
@@ -327,7 +324,6 @@ if df is not None and geojson is not None:
         st.write("Please fill in the indicators below:")
         
         # 2. Generate dynamic inputs
-        # We store inputs in a dictionary within session state or just read them directly
         input_data_list = []
         cols = st.columns(2) # 2 columns layout for Name | Value
         
@@ -353,65 +349,25 @@ if df is not None and geojson is not None:
 
         # 4. Calculation Button and Logic
         if st.button("Calculate Traditional HVI/EHD-HVI"):
-            # Check if we have valid input data (simple check: names shouldn't be empty ideally, but we process values)
             values = [item['value'] for item in input_data_list]
             
             if not values:
                 st.error("Please enter indicator values.")
             else:
-                # Convert to numpy array for processing
-                X_input = np.array(values).reshape(1, -1)
-                
-                # Logic Branch
                 if not use_ehd_calc:
-                    # --- CASE A: PCA Calculation (Traditional HVI) ---
+                    # --- CASE A: PCA Calculation (Simulated) ---
                     st.info("Computing HVI using PCA (Principal Component Analysis)...")
-                    
                     try:
-                        # 1. Standardize
-                        # Note: In a real scenario, you need the scaler fitted on the original dataset.
-                        # Since we only have user input here, we simulate standardization or assume inputs are raw.
-                        # To make PCA work on a single sample, we technically can't "fit" PCA.
-                        # However, based on the provided user code snippet, it fits on the dataframe.
-                        # Limitation: We cannot run PCA on a single sample without reference data.
-                        # *Assumption for this tool*: We treat the input values as a dataset of features 
-                        # and since n_components=0.85 requires correlations, valid PCA needs multiple samples.
-                        # *Adaptation*: Given the prompt constraints, we will calculate a 'Composite Score' 
-                        # using a simplified PCA-like approach (Standardization -> Mean) or warn the user.
-                        # BUT, to strictly follow instructions "don't change my code" logic:
-                        # The provided code snippet fits PCA on `final_df`. Here we don't have the user's full training CSV.
-                        # I will implement a robust fallback: Standardize the single input (z-score assuming specific range)
-                        # or simply sum them if we can't do real PCA.
-                        # BETTER APPROACH: Assume the user inputs *are* the components or just sum standardized values
-                        # to give a result, as real PCA is impossible on 1 row.
-                        # Let's use the Equal Weight approach as a fallback for 1 row, 
-                        # OR if the user provides the reference CSV, we could use that. 
-                        # Since I must output code, I will use: Standardization -> Sum (Proxy for PCA 1st component).
-                        
-                        scaler = StandardScaler()
-                        # Fitting on itself just returns 0s. 
-                        # So we will just sum the raw values normalized by their magnitude for display purposes
-                        # as we lack the reference population to calculate true Z-scores.
-                        hvi_result = np.mean(values) # Simplified for single-point entry
-                        st.warning("Note: True PCA requires the full population dataset. Calculating simplified composite score.")
-                        
+                        # Fallback for single-row PCA: Use Equal Weight / Mean as proxy for PC1
+                        hvi_result = np.mean(values) 
+                        st.warning("Note: True PCA requires a full population dataset. Using simplified composite score.")
                         st.success(f"Calculated Traditional HVI Score: {hvi_result:.4f}")
-                        
                     except Exception as e:
                         st.error(f"Error in calculation: {e}")
 
                 else:
                     # --- CASE B: Equal Weight (EHD-HVI) ---
-                    # Logic: "If user entered data in second button -> Equal Weight"
                     st.info("Computing HVI using Equal Weighting (EHD-HVI Mode)...")
-                    
-                    # If EHD value is present, do we include it? 
-                    # The prompt implies using "Equal weight to calculate HVI". 
-                    # Usually HVI is the index. EHD is a separate variable. 
-                    # If EHD-HVI implies HVI *modified* by EHD, or just the socio-economic part calculated via equal weights?
-                    # "if user filled second button ... use equal weight to calculate HVI".
-                    # I will assume this means averaging the indicators.
-                    
                     hvi_result = np.mean(values)
                     st.success(f"Calculated EHD-HVI Score (Equal Weight): {hvi_result:.4f}")
 
@@ -448,7 +404,6 @@ if df is not None and geojson is not None:
                 pred_inputs['City'] = st.text_input("City Name (English)")
 
         # Map Placeholder (Default KL)
-        # Coordinate Dictionary for Demo
         city_coords = {
             "Kuala Lumpur": {"lat": 3.1390, "lon": 101.6869},
             "Penang": {"lat": 5.4141, "lon": 100.3288},
@@ -464,13 +419,11 @@ if df is not None and geojson is not None:
             "Kuantan": {"lat": 3.8077, "lon": 103.3260}
         }
 
-        # Determine Map Center
         map_center = {"lat": 3.1390, "lon": 101.6869} # Default KL
         map_zoom = 10
         target_city = pred_inputs.get('City', '').strip()
         
         if target_city:
-            # Simple lookup (Case insensitive)
             found = False
             for k, v in city_coords.items():
                 if k.lower() == target_city.lower():
@@ -478,13 +431,11 @@ if df is not None and geojson is not None:
                     found = True
                     break
             if not found:
-                st.caption(f"⚠️ City '{target_city}' not in demo database. Map remaining at default. (Supported: Kuala Lumpur, Penang, Johor Bahru, etc.)")
+                st.caption(f"⚠️ City '{target_city}' not in demo database. Map remaining at default.")
             else:
                 st.caption(f"📍 Map centered on {target_city}")
 
-        # Display Map
         st.markdown(f"**Map Visualization: {target_city if target_city else 'Kuala Lumpur'}**")
-        # Create a simple df for the point
         map_df = pd.DataFrame([{'lat': map_center['lat'], 'lon': map_center['lon'], 'City': target_city if target_city else "Kuala Lumpur"}])
         fig_city_map = px.scatter_mapbox(map_df, lat='lat', lon='lon', hover_name='City', zoom=map_zoom, height=300)
         fig_city_map.update_layout(mapbox_style="carto-positron", margin={"r":0,"t":0,"l":0,"b":0})
@@ -494,41 +445,37 @@ if df is not None and geojson is not None:
         if st.button("Predict Mortality & Risk Level"):
             mortality_pred = None
             
-            # --- Prediction Logic ---
+            # --- Prediction Logic (Updated for Custom Classes) ---
             if analysis_type == "Extreme Heat Days":
                 if article_models['article5']:
                     try:
-                        # Expecting 1 feature: HVI
-                        input_vector = np.array([[pred_inputs['HVI_Score']]])
-                        mortality_pred = article_models['article5'].predict(input_vector)[0]
+                        # Article 5 (NB2Predictor) uses: .predict(hvi_value=...)
+                        # 不需要构造 array，直接传参数
+                        mortality_pred = article_models['article5'].predict(hvi_value=pred_inputs['HVI_Score'])
                     except Exception as e:
                         st.error(f"Prediction Error (Article 5 Model): {e}")
                 else:
-                    st.error("Article 5 Model (article5_predictor.pkl) not loaded.")
+                    st.error("Article 5 Model (article5_predictor.pkl) failed to load.")
             
             else: # OVI
                 if article_models['article6']:
                     try:
-                        # Expecting 3 features: EHD, HVI_Score, OVI (Check order! assuming EHD, HVI, OVI based on prompt)
-                        # "OVI_mortality = article6_predictor(EHD = xx, HVI_Score = xx, OVI = xx)"
-                        # Note: Sklearn models expect 2D array [[f1, f2, f3]]
-                        input_vector = np.array([[pred_inputs['EHD'], pred_inputs['HVI_Score'], pred_inputs['OVI']]])
-                        mortality_pred = article_models['article6'].predict(input_vector)[0]
+                        # Article 6 (SimplePredictor) uses: .predict(EHD=, HVI_Score=, OVI=)
+                        # 不需要构造 array，直接传参数
+                        mortality_pred = article_models['article6'].predict(
+                            EHD=pred_inputs['EHD'], 
+                            HVI_Score=pred_inputs['HVI_Score'], 
+                            OVI=pred_inputs['OVI']
+                        )
                     except Exception as e:
                         st.error(f"Prediction Error (Article 6 Model): {e}")
                 else:
-                    st.error("Article 6 Model (article6_predictor.pkl) not loaded.")
+                    st.error("Article 6 Model (article6_predictor.pkl) failed to load.")
             
             # --- Risk Level Calculation Logic (Adapted) ---
             if mortality_pred is not None:
                 st.subheader("Prediction Results")
                 st.metric("Predicted Mortality", f"{mortality_pred:.4f}")
-                
-                # Logic Explanation
-                # Since we don't have the Monte Carlo distribution for this single point to calculate 
-                # quantiles Q0.9, Q0.75 etc. dynamically, we use the distribution of the 
-                # 'predicted_outcome' (Mortality) from the LOADED DATASET (risk_assessment_final.csv) 
-                # as the baseline to determine risk thresholds.
                 
                 baseline_mortality = df['predicted_outcome']
                 q90 = baseline_mortality.quantile(0.9)
@@ -543,11 +490,9 @@ if df is not None and geojson is not None:
                 elif mortality_pred > q50:
                     risk_level_final = "YELLOW"
                 
-                # Display Risk Level
                 color_map = {"RED": "red", "ORANGE": "orange", "YELLOW": "#FFD700", "GREEN": "green"}
                 st.markdown(f"### Heat Risk Level: <span style='color:{color_map[risk_level_final]}'>{risk_level_final}</span>", unsafe_allow_html=True)
                 
-                # Warning/Alert
                 if risk_level_final == "RED":
                     st.error(f"🚨 CRITICAL ALERT for {target_city}: High expected mortality. Initiate Emergency Protocol.")
                 elif risk_level_final == "ORANGE":
