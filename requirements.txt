@@ -2,7 +2,9 @@ streamlit
 pandas
 plotly
 google-generativeai
-scikit-learn
+joblib
 numpy
+scikit-learn
 statsmodels
 xgboost
+geopy
