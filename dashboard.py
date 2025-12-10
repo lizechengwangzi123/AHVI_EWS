@@ -29,21 +29,32 @@ def load_risk_model(model_path):
 
 risk_model = load_risk_model('champion_model_pipeline.joblib')
 
-# [NEW] Loaders for the new article predictors
+# [UPDATED] Loaders for the new article predictors
+# 使用 joblib 替代 pickle，通常对 sklearn 模型兼容性更好
+# 增加了 try-except 块，防止因模型文件损坏或版本问题导致整个 App 崩溃
 @st.cache_resource
 def load_article_models():
     models = {}
-    try:
-        with open('article5_predictor.pkl', 'rb') as f:
-            models['article5'] = pickle.load(f)
-    except FileNotFoundError:
-        models['article5'] = None
     
-    try:
-        with open('article6_predictor.pkl', 'rb') as f:
-            models['article6'] = pickle.load(f)
-    except FileNotFoundError:
-        models['article6'] = None
+    def load_safe(path):
+        try:
+            # 尝试优先使用 joblib 加载 (通常比 pickle 更健壮)
+            return joblib.load(path)
+        except FileNotFoundError:
+            st.warning(f"⚠️ 文件未找到: {path}")
+            return None
+        except Exception as e:
+            # 如果 joblib 失败，尝试回退到 pickle
+            try:
+                with open(path, 'rb') as f:
+                    return pickle.load(f)
+            except Exception as e2:
+                # 如果都失败了，打印错误但不阻断 App 运行
+                st.error(f"❌ 无法加载模型 {path}。可能是版本不兼容或缺少类定义。\n详细错误: {e}")
+                return None
+
+    models['article5'] = load_safe('article5_predictor.pkl')
+    models['article6'] = load_safe('article6_predictor.pkl')
     return models
 
 article_models = load_article_models()
