@@ -578,7 +578,7 @@ if df is not None and geojson is not None:
                     with st.spinner("Predicting Mortality & Assessing Risk Levels..."):
                         final_df = calculate_risk_score_and_level(final_df, model_type)
                     
-                    # [REQ] Delete "Analysis Results" Table - Removed here.
+                    # [REQ] REMOVED "Analysis Results" Table
                     
                     # 5. Map Visualization
                     st.subheader("🗺️ Risk Map")
@@ -612,9 +612,10 @@ if df is not None and geojson is not None:
                             available_dates = sorted(map_df['date_str'].unique())
                             
                             if available_dates:
-                                selected_date = st.select_slider("Select Time Period:", options=available_dates)
+                                st.write("---")
+                                selected_date = st.select_slider("📅 Select Time Period:", options=available_dates)
                                 plot_df = map_df[map_df['date_str'] == selected_date]
-                                st.caption(f"Showing Heat Risk Level for: {selected_date}")
+                                st.caption(f"Showing Heat Risk Level for: **{selected_date}**")
 
                     if not plot_df.empty:
                         fig_new_map = px.scatter_mapbox(
