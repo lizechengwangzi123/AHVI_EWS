@@ -2,7 +2,6 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 import json
-import google.generativeai as genai
 import joblib
 import numpy as np
 import smtplib 
@@ -11,10 +10,9 @@ import pickle
 # [NEW] 必须导入这些库，否则无法读取模型文件
 import statsmodels.api as sm 
 import xgboost as xgb
-# [NEW] 地理编码库，用于搜索全球城市
+# [NEW] 地理编码与Excel库
 from geopy.geocoders import Nominatim 
 from geopy.exc import GeocoderTimedOut
-
 from sklearn.preprocessing import StandardScaler 
 from sklearn.decomposition import PCA 
 
@@ -33,98 +31,53 @@ class SimplePredictor:
         """
         只用3个核心特征预测，其他特征自动设为默认值
         """
-        # 创建特征向量（使用默认值）
         features = np.zeros(len(self.config['feature_order']))
-        
-        # 设置默认值
         for i, feat in enumerate(self.config['feature_order']):
             if feat in self.config['default_values']:
                 features[i] = self.config['default_values'][feat]
         
-        # 设置用户输入的3个特征
         feat_dict = {'EHD': EHD, 'HVI_Score': HVI_Score, 'OVI': OVI}
         for feat_name, value in feat_dict.items():
             if value is not None and feat_name in self.config['feature_order']:
                 idx = self.config['feature_order'].index(feat_name)
                 features[idx] = value
         
-        # 预测
         return self.model.predict([features])[0]
 
 class NB2Predictor:
     """NB2模型预测器 - 只需输入HVI值"""
     
     def __init__(self):
-        # 从保存的文件加载模型
-        # 注意：如果是从 pickle 加载实例，__init__ 不会被调用
         self.model = joblib.load("article5_model.pkl")
         with open("best_model_details.json", "r") as f:
             self.info = json.load(f)
         
-        # 固定默认值
-        self.default_month = 6  # 默认6月
-        self.default_time_index = 100  # 默认时间趋势
-        self.default_shock_2021_10 = 0  # 默认非异常月
-        self.default_shock_2022_03 = 0  # 默认非异常月
-        
-        # 特征顺序
+        self.default_month = 6  
+        self.default_time_index = 100  
+        self.default_shock_2021_10 = 0  
+        self.default_shock_2022_03 = 0  
         self.feature_order = self.info['features']
     
     def create_feature_vector(self, hvi_value, month=None, time_index=None):
-        """创建特征向量"""
-        # 使用默认值或用户指定值
         month = month if month is not None else self.default_month
         time_index = time_index if time_index is not None else self.default_time_index
-        
-        # 初始化所有特征为0
         features = {feat: 0.0 for feat in self.feature_order}
-        
-        # 设置固定特征
         features['Intercept'] = 1.0
         features['HVI_LST_EHD_EQ'] = hvi_value
         features['time_index'] = time_index
         features['alpha'] = 0.002232  
         features['shock_2021_10'] = self.default_shock_2021_10
         features['shock_2022_03'] = self.default_shock_2022_03
-        
-        # 设置月份虚拟变量（one-hot编码）
         for i in range(2, 13):
             month_col = f'C(month)[T.{i}]'
             if month_col in features:
                 features[month_col] = 1.0 if i == month else 0.0
-        
         return features
     
     def predict(self, hvi_value, month=None, time_index=None):
-        """预测函数 - 只需输入HVI值"""
-        # 创建特征向量
         features = self.create_feature_vector(hvi_value, month, time_index)
-        
-        # 按顺序转换为数组
         X = np.array([[features[feat] for feat in self.feature_order]])
-        
-        # 预测
         return float(self.model.predict(X)[0])
-    
-    def batch_predict(self, hvi_values, months=None, time_indices=None):
-        """批量预测"""
-        if months is None:
-            months = [self.default_month] * len(hvi_values)
-        if time_indices is None:
-            time_indices = [self.default_time_index] * len(hvi_values)
-        
-        results = []
-        for hvi, month, time_idx in zip(hvi_values, months, time_indices):
-            results.append(self.predict(hvi, month, time_idx))
-        
-        return results
-    
-    def get_feature_importance(self):
-        """获取特征重要性"""
-        return {
-            feat: abs(coef) 
-            for feat, coef in self.info['coefficients'].items()
-        }
 
 # ==============================================================================
 
@@ -146,24 +99,19 @@ def load_risk_model(model_path):
 
 risk_model = load_risk_model('champion_model_pipeline.joblib')
 
-# [UPDATED] Loaders with robust error handling
 @st.cache_resource
 def load_article_models():
     models = {}
-    
     def load_safe(path):
         try:
-            # First try joblib
             return joblib.load(path)
         except:
             try:
-                # Fallback to pickle
                 with open(path, 'rb') as f:
                     return pickle.load(f)
             except Exception as e:
                 st.error(f"❌ Failed to load {path}. Error: {e}")
                 return None
-
     models['article5'] = load_safe('article5_predictor.pkl')
     models['article6'] = load_safe('article6_predictor.pkl')
     return models
@@ -171,10 +119,225 @@ def load_article_models():
 article_models = load_article_models()
 
 try:
+    import google.generativeai as genai
     genai.configure(api_key=st.secrets["api_keys"]["gemini_api_key"])
     API_AVAILABLE = True
-except (KeyError, AttributeError):
+except (KeyError, AttributeError, ImportError):
     API_AVAILABLE = False
+
+# --- Helper Functions for New Logic ---
+
+def get_coords(city_name):
+    """获取城市坐标"""
+    geolocator = Nominatim(user_agent="ahvi_dashboard_v2")
+    try:
+        location = geolocator.geocode(city_name, timeout=5)
+        if location:
+            return location.latitude, location.longitude
+    except:
+        pass
+    return None, None
+
+def calculate_seasonality_adjustment(df):
+    """
+    根据 Eq 1-4 计算 Pw_i
+    Requires: 'date' (monthly), 'nighttime_light', 'population'
+    """
+    # Copy to avoid SettingWithCopyWarning
+    df = df.copy()
+    
+    # Check if required columns exist
+    if not all(col in df.columns for col in ['date', 'nighttime_light', 'population']):
+        st.error("Missing seasonality columns: date, nighttime_light, population")
+        return df
+
+    df['date'] = pd.to_datetime(df['date'])
+    df['month'] = df['date'].dt.month
+    df['year'] = df['date'].dt.year
+    
+    # Eq 1: NTL March Baseline
+    # Convert 'nighttime_light' to numeric, forcing errors to NaN
+    df['nighttime_light'] = pd.to_numeric(df['nighttime_light'], errors='coerce')
+    
+    march_data = df[df['month'] == 3].set_index('year')['nighttime_light']
+    yearly_mean_ntl = df.groupby('year')['nighttime_light'].mean()
+    
+    def get_ntl_march(row):
+        y = row['year']
+        # Try to get March data for that year
+        if y in march_data.index and not pd.isna(march_data[y]):
+            return march_data[y]
+        # Fallback to yearly mean
+        return yearly_mean_ntl.get(y, row['nighttime_light']) 
+    
+    df['NTL_March'] = df.apply(get_ntl_march, axis=1)
+    
+    # Eq 2: Seasonality Coefficient S^m
+    # Avoid division by zero
+    df['S_m'] = df['nighttime_light'] / df['NTL_March'].replace(0, 1)
+    
+    # Eq 3: Monthly Population
+    df['Pop_Monthly'] = df['S_m'] * df['population']
+    
+    # Eq 4: Dynamic Population Coefficient Pw_i
+    # Pw_i = Pop_Monthly_i / Mean(Pop_Monthly_All)
+    mean_pop = df['Pop_Monthly'].mean()
+    if mean_pop == 0: mean_pop = 1 # Avoid div by zero
+    df['Pw_i'] = df['Pop_Monthly'] / mean_pop
+    
+    return df
+
+def process_hvi_calculation(df, analysis_mode, apply_seasonality=False):
+    """
+    计算 HVI:
+    1. 提取 Socio-economic 特征 (排除固定列)
+    2. 标准化 (StandardScaler) -> 解决数值过大问题
+    3. PCA 或 Equal Weight
+    4. 如果是 Seasonality 模式，应用 HVI_Dynamic = HVI * Pw_i
+    """
+    df = df.copy()
+    
+    # 排除非HVI特征列
+    exclude_cols = ['sheet_name', 'city', 'EHD', 'OVI', 'date', 'nighttime_light', 
+                    'population', 'month', 'year', 'NTL_March', 'S_m', 'Pop_Monthly', 'Pw_i',
+                    'lat', 'lon', 'Predicted_Mortality', 'Risk_Score', 'Risk_Level', 'Color']
+    
+    feature_cols = [c for c in df.columns if c not in exclude_cols]
+    
+    if not feature_cols:
+        st.error("未找到用于计算 HVI 的特征列。请检查 Excel 文件。")
+        return df, []
+    
+    # [CRITICAL] 标准化输入数据 - 解决数值异常核心步骤
+    scaler = StandardScaler()
+    # Fill NA with mean to handle missing data gracefully
+    X_input = df[feature_cols].fillna(df[feature_cols].mean())
+    X_scaled = scaler.fit_transform(X_input)
+    
+    # 决定计算方法
+    hvi_scores = []
+    
+    if "Extreme Heat Days" in analysis_mode:
+        # Equal Weight (Mean of standardized features)
+        hvi_scores = np.mean(X_scaled, axis=1)
+    else:
+        # PCA (OVI Mode) - Defaulting to PCA1
+        try:
+            pca = PCA(n_components=1) 
+            hvi_scores = pca.fit_transform(X_scaled).flatten()
+            # 简单的方向校正：假设 Feature 和 HVI 是正相关的
+            # 如果 input 均值大 -> score 应该大。如果 correlation < 0 则翻转
+            if np.corrcoef(np.mean(X_input, axis=1), hvi_scores)[0,1] < 0:
+                hvi_scores = -hvi_scores
+        except:
+            hvi_scores = np.mean(X_scaled, axis=1) # Fallback to Equal Weight
+            
+    df['HVI_Score'] = hvi_scores
+    
+    # Eq 8: Dynamic HVI Adjustment
+    if apply_seasonality and 'Pw_i' in df.columns:
+        df['HVI_Final'] = df['HVI_Score'] * df['Pw_i']
+    else:
+        df['HVI_Final'] = df['HVI_Score']
+        
+    return df, feature_cols
+
+def calculate_risk_score_and_level(df, analysis_mode):
+    """
+    计算 Predicted Mortality, Risk Score (Eq 1-3), 和 Risk Level (Eq Final)
+    """
+    df = df.copy()
+    
+    model = article_models['article5'] if "Extreme Heat Days" in analysis_mode else article_models['article6']
+    
+    if model is None:
+        st.error("模型加载失败，无法计算风险。")
+        return df
+    
+    # 1. Predict Mortality
+    preds = []
+    for idx, row in df.iterrows():
+        hvi_val = row['HVI_Final']
+        ehd_val = row.get('EHD', 0)
+        ovi_val = row.get('OVI', 0)
+        
+        pred_val = 0
+        try:
+            if "Extreme Heat Days" in analysis_mode:
+                # Article 5 (NB2): input HVI
+                pred_val = model.predict(hvi_value=hvi_val)
+            else:
+                # Article 6 (Simple): input EHD, HVI, OVI
+                pred_val = model.predict(EHD=ehd_val, HVI_Score=hvi_val, OVI=ovi_val)
+        except Exception as e:
+            # st.warning(f"Error predicting row {idx}: {e}")
+            pred_val = 0
+            
+        preds.append(pred_val)
+    
+    df['Predicted_Mortality'] = preds
+    
+    # 2. Calculate Risk Score (Eq 1-3)
+    # 选取关键驱动因子：HVI_Final, EHD, OVI (如果有)
+    drivers = ['HVI_Final']
+    if 'EHD' in df.columns: drivers.append('EHD')
+    if 'OVI' in df.columns: drivers.append('OVI')
+    
+    # Eq 1: Standardize drivers (Z_ij) relative to THIS dataset
+    # (对比这几个城市或这几个月的数据)
+    scaler_risk = StandardScaler()
+    X_drivers = df[drivers].fillna(0)
+    
+    if len(df) > 1:
+        z_scores = scaler_risk.fit_transform(X_drivers)
+    else:
+        z_scores = np.zeros(X_drivers.shape) # Only 1 row, Z is 0
+    
+    # Eq 2: Weights 
+    # 简单起见，假设各因子权重相等 (因为很难动态获取 pickle 模型的内部系数)
+    n_drivers = len(drivers)
+    weights = np.ones(n_drivers) / n_drivers # w_j = 1/n
+    
+    # Eq 3: Risk Score = Sum(w * Z)
+    df['Risk_Score'] = np.dot(z_scores, weights)
+    
+    # 3. Calculate Risk Level (Dynamic Quantiles)
+    # 基于当前数据集分布计算阈值
+    if len(df) > 1:
+        q_mort_90 = df['Predicted_Mortality'].quantile(0.90)
+        q_mort_75 = df['Predicted_Mortality'].quantile(0.75)
+        q_mort_50 = df['Predicted_Mortality'].quantile(0.50)
+        
+        q_risk_85 = df['Risk_Score'].quantile(0.85)
+        q_risk_75 = df['Risk_Score'].quantile(0.75)
+        q_risk_50 = df['Risk_Score'].quantile(0.50)
+    else:
+        # 单行数据无法计算分位数，给默认值或直接绿色
+        q_mort_90 = q_mort_75 = q_mort_50 = float('inf')
+        q_risk_85 = q_risk_75 = q_risk_50 = float('inf')
+    
+    levels = []
+    colors = []
+    
+    for idx, row in df.iterrows():
+        pm = row['Predicted_Mortality']
+        rs = row['Risk_Score']
+        
+        if pm > q_mort_90 and rs > q_risk_85:
+            lvl, col = "RED", "red"
+        elif rs > q_risk_75 and pm > q_mort_75:
+            lvl, col = "ORANGE", "orange"
+        elif rs > q_risk_50 or pm > q_mort_50:
+            lvl, col = "YELLOW", "#FFD700"
+        else:
+            lvl, col = "GREEN", "green"
+        levels.append(lvl)
+        colors.append(col)
+        
+    df['Risk_Level'] = levels
+    df['Color'] = colors
+    
+    return df
 
 # --- Data Loading and Processing Functions ---
 @st.cache_data
@@ -185,7 +348,6 @@ def load_data(filepath, geojson_path):
             geojson = json.load(f)
         return df, geojson
     except FileNotFoundError as e:
-        st.error(f"File not found: {e}.")
         return None, None
 
 @st.cache_data
@@ -194,61 +356,43 @@ def convert_df_to_csv(df):
 
 # --- [NEW] Updated Logic: Rule-Based Override (Equation 1) ---
 def assign_risk_level_enhanced(predicted_outcome, thresholds, utci_val):
-    """
-    Assigns risk level with Rule-Based Override:
-    If UTCI > 46, force RED (Equation 1).
-    Otherwise use percentile thresholds.
-    """
     if utci_val > 46.0:
         return "RED", "Critical Risk (Heatwave Override)"
-    
     if predicted_outcome > thresholds[0.9]: return "RED", "Critical Risk"
     if predicted_outcome > thresholds[0.75]: return "ORANGE", "High Risk"
     if predicted_outcome > thresholds[0.5]: return "YELLOW", "Medium Risk"
     return "GREEN", "Low Risk"
 
 # --- Main App Logic ---
-st.title("🔬 AI-Enhanced Heat Vulnerability Index+ EWS & Research Dashboard")
-st.sidebar.markdown("---")
-st.sidebar.markdown("**AHVI+ Early Warning System**")
-st.sidebar.markdown("*AI-Powered by Google Gemini*")
-st.sidebar.markdown("Developed by Zecheng Li")
-
 df, geojson = load_data("risk_assessment_final.csv", "malaysia_states.json")
 
-if df is not None and geojson is not None:
-    # --- Data Cleaning & Pre-calculation ---
+# --- Sidebar ---
+st.sidebar.header("Filter & Actions")
+# 仅当 df 加载成功时才显示 Filter
+if df is not None:
+    # Data Cleaning for Sidebar
     name_mapping = {
         "Kuala Lumpur": "KualaLumpur", "W.P. Putrajaya": "Putrajaya", "W.P. Labuan": "Labuan",
         "Pulau Pinang": "Panang", "Negeri Sembilan": "NegeriSembilan", "Terengganu": "Trengganu"
     }
     df['district_id'] = df['district_id'].replace(name_mapping)
     df = df.sort_values(by="risk_factor_score", ascending=False).reset_index(drop=True)
-
-    if 'UTCI_mean' in df.columns and 'PM25_mean' in df.columns:
-        df['exposure_score'] = (df['UTCI_mean'] - df['UTCI_mean'].mean()) / df['UTCI_mean'].std() + \
-                               (df['PM25_mean'] - df['PM25_mean'].mean()) / df['PM25_mean'].std() + \
-                               (df['O3_q95'] - df['O3_q95'].mean()) / df['O3_q95'].std()
     
-    min_score, max_score = df['risk_factor_score'].min(), df['risk_factor_score'].max()
-    if (max_score - min_score) != 0:
-        df['risk_score_for_size'] = 5 + ((df['risk_factor_score'] - min_score) / (max_score - min_score)) * 45
+    # Pre-calc thresholds for On-Demand Tab
+    if 'predicted_outcome' in df.columns:
+        prediction_thresholds = df['predicted_outcome'].quantile([0.5, 0.75, 0.9]).to_dict()
+        hist_mean = df['predicted_outcome'].mean()
+        hist_std = df['predicted_outcome'].std()
     else:
-        df['risk_score_for_size'] = 20
+        prediction_thresholds = {0.5: 0, 0.75: 0, 0.9: 0}
+        hist_mean, hist_std = 0, 1
 
-    prediction_thresholds = df['predicted_outcome'].quantile([0.5, 0.75, 0.9]).to_dict()
-    
-    # --- [NEW] Calculate History Stats for Anomaly Detection (Equation 2) ---
-    hist_mean = df['predicted_outcome'].mean()
-    hist_std = df['predicted_outcome'].std()
-
-    # --- Sidebar ---
-    st.sidebar.header("Filter & Actions")
     risk_levels = df['risk_level'].unique()
     selected_levels = st.sidebar.multiselect('Filter by risk level:', options=risk_levels, default=risk_levels)
     df_filtered = df[df['risk_level'].isin(selected_levels)]
     district_list = sorted(df_filtered['district_id'].unique())
     selected_district = st.sidebar.selectbox('Select a district:', options=district_list)
+    
     st.sidebar.markdown("---")
     st.sidebar.subheader("Export Data")
     csv_data = convert_df_to_csv(df_filtered)
@@ -257,47 +401,52 @@ if df is not None and geojson is not None:
         file_name=f'heat_risk_data_{pd.Timestamp.now().strftime("%Y%m%d")}.csv', mime='text/csv'
     )
 
-    # ==================== FEEDBACK FUNCTION ====================
-    st.sidebar.markdown("---")
-    st.sidebar.subheader("✉️ Provide Feedback")
-    feedback_text = st.sidebar.text_area("Share your feedback or report a bug:")
-    if st.sidebar.button("Send Feedback"):
-        if feedback_text:
-            try:
-                sender_email = st.secrets["email_credentials"]["sender_email"]
-                password = st.secrets["email_credentials"]["sender_password"]
-                receiver_email = "23053789@siswa.um.edu.my"
-                subject = "Feedback from AHVI+ EWS Dashboard"
-                body = f"User Feedback:\n\n{feedback_text}"
-                message = f"Subject: {subject}\n\n{body}"
-                context = ssl.create_default_context()
-                with smtplib.SMTP_SSL("smtp.gmail.com", 465, context=context) as server:
-                    server.login(sender_email, password)
-                    server.sendmail(sender_email, receiver_email, message.encode('utf-8'))
-                st.sidebar.success("Thank you! Your feedback has been sent successfully.")
-            except KeyError:
-                st.sidebar.error("Email credentials are not configured in the app's secrets.")
-            except Exception as e:
-                st.sidebar.error(f"Failed to send feedback. Error: {e}")
-        else:
-            st.sidebar.warning("Please enter your feedback before sending.")
+# Feedback
+st.sidebar.markdown("---")
+st.sidebar.subheader("✉️ Provide Feedback")
+feedback_text = st.sidebar.text_area("Share your feedback or report a bug:")
+if st.sidebar.button("Send Feedback"):
+    if feedback_text:
+        try:
+            sender_email = st.secrets["email_credentials"]["sender_email"]
+            password = st.secrets["email_credentials"]["sender_password"]
+            receiver_email = "23053789@siswa.um.edu.my"
+            subject = "Feedback from AHVI+ EWS Dashboard"
+            body = f"User Feedback:\n\n{feedback_text}"
+            message = f"Subject: {subject}\n\n{body}"
+            context = ssl.create_default_context()
+            with smtplib.SMTP_SSL("smtp.gmail.com", 465, context=context) as server:
+                server.login(sender_email, password)
+                server.sendmail(sender_email, receiver_email, message.encode('utf-8'))
+            st.sidebar.success("Thank you! Your feedback has been sent successfully.")
+        except KeyError:
+            st.sidebar.error("Email credentials are not configured in the app's secrets.")
+        except Exception as e:
+            st.sidebar.error(f"Failed to send feedback. Error: {e}")
+    else:
+        st.sidebar.warning("Please enter your feedback before sending.")
 
-    # --- Main content area ---
-    tab_list = [
-        "📍 Overview & Map", 
-        "🔬 District Deep Dive & Simulator",
-        "📊 Risk Deconstruction",
-        "🕹️ On-Demand Prediction",
-        "🤖 AI Policy Advisor"
-    ]
+# --- Main Tabs ---
+tab_list = [
+    "📍 Overview & Map", 
+    "🔬 District Deep Dive & Simulator",
+    "📊 Risk Deconstruction",
+    "🕹️ On-Demand Prediction",
+    "🤖 AI Policy Advisor"
+]
+
+if 'active_tab' not in st.session_state:
+    st.session_state.active_tab = tab_list[0]
+
+st.session_state.active_tab = st.radio(
+    "Navigation", tab_list, horizontal=True, label_visibility="collapsed"
+)
+
+if df is not None and geojson is not None:
     
-    if 'active_tab' not in st.session_state:
-        st.session_state.active_tab = tab_list[0]
-
-    st.session_state.active_tab = st.radio(
-        "Navigation", tab_list, horizontal=True, label_visibility="collapsed"
-    )
-
+    # =========================================================================
+    # TAB 1: Overview & Map
+    # =========================================================================
     if st.session_state.active_tab == "📍 Overview & Map":
         st.header("📈 At a Glance")
         col1, col2, col3 = st.columns(3)
@@ -307,6 +456,7 @@ if df is not None and geojson is not None:
         col2.metric("Districts Under Alert", f"{high_risk_count}")
         avg_risk_score = df['risk_factor_score'].mean()
         col3.metric("Average Risk Factor Score", f"{avg_risk_score:.2f}")
+        
         st.markdown("---")
         st.header("Geographic Risk Distribution Map")
         fig_map = px.choropleth_mapbox(df_filtered, geojson=geojson, locations='district_id',
@@ -319,234 +469,164 @@ if df is not None and geojson is not None:
         st.plotly_chart(fig_map, use_container_width=True)
 
         # =========================================================================
-        # [NEW SECTION 1] Socio-economic / Traditional HVI Calculator
+        # [NEW REDESIGNED SECTION] Multi-City & Temporal Risk Analysis
         # =========================================================================
         st.markdown("---")
-        st.subheader("🧮 Socio-economic & Traditional HVI Calculator")
-        
-        # 1. Select number of indicators
-        num_indicators = st.number_input("Enter number of indicators:", min_value=1, max_value=20, value=6, step=1)
-        
-        st.write("Please fill in the indicators below:")
-        
-        # 2. Generate dynamic inputs
-        input_data_list = []
-        cols = st.columns(2) # 2 columns layout for Name | Value
-        
-        # Creating a container to hold the inputs
-        with st.container():
-            for i in range(int(num_indicators)):
-                c1, c2 = st.columns([1, 1])
-                with c1:
-                    ind_name = st.text_input(f"Indicator {i+1} Name", key=f"ind_name_{i}")
-                with c2:
-                    ind_val = st.number_input(f"Indicator {i+1} Value", key=f"ind_val_{i}", format="%.4f")
-                input_data_list.append({'name': ind_name, 'value': ind_val})
+        st.header("🌍 Multi-City & Temporal Heat Risk Analysis")
+        st.info("Upload Excel data to perform dynamic HVI calculation, seasonality adjustment, and comparative risk assessment.")
 
-        # 3. Special EHD Button
-        st.markdown("#### Special Configuration")
-        col_special_btn, col_ehd_input = st.columns([1, 2])
+        # 1. Selection
+        analysis_mode = st.radio("Select Analysis Scenario:", 
+            ["Function 1: Multi-City Comparison (Same Time)", "Function 2: Single-City Time Series Analysis"])
         
-        use_ehd_calc = st.checkbox("⚙️ * Enable EHD-HVI Mode (Click only for EHD-HVI calculation)", help="Only check this if you are performing EHD-HVI analysis.")
+        model_type = st.radio("Select Vulnerability Model:",
+            ["Extreme Heat Days (EHD)", "Organizational Vulnerability Index (OVI)"])
         
-        ehd_value_input = None
-        if use_ehd_calc:
-            ehd_value_input = st.number_input("Extreme Heat Days:", value=0.0)
-
-        # 4. Calculation Button and Logic
-        if st.button("Calculate Traditional HVI/EHD-HVI"):
-            values = [item['value'] for item in input_data_list]
-            
-            if not values:
-                st.error("Please enter indicator values.")
-            else:
-                if not use_ehd_calc:
-                    # --- CASE A: PCA Calculation (Simulated) ---
-                    st.info("Computing HVI using PCA (Principal Component Analysis)...")
-                    try:
-                        # Fallback for single-row PCA: Use Equal Weight / Mean as proxy for PC1
-                        hvi_result = np.mean(values) 
-                        st.warning("Note: True PCA requires a full population dataset. Using simplified composite score.")
-                        st.success(f"Calculated Traditional HVI Score: {hvi_result:.4f}")
-                    except Exception as e:
-                        st.error(f"Error in calculation: {e}")
-
-                else:
-                    # --- CASE B: Equal Weight (EHD-HVI) ---
-                    st.info("Computing HVI using Equal Weighting (EHD-HVI Mode)...")
-                    hvi_result = np.mean(values)
-                    st.success(f"Calculated EHD-HVI Score (Equal Weight): {hvi_result:.4f}")
-
-        # =========================================================================
-        # [NEW SECTION 2] Extra Indicators Considerations
-        # =========================================================================
-        st.markdown("---")
-        st.subheader("Extra indicators considerations")
+        # 2. File Uploader
+        uploaded_file = st.file_uploader("Upload Excel File (.xlsx)", type=['xlsx'])
         
-        # 1. Selection Container
-        analysis_type = st.radio("Select Analysis Type:", 
-                                 ["Extreme Heat Days", "Organizational Vulnerability Index"])
-        
-        # Container for inputs
-        pred_inputs = {}
-        
-        if analysis_type == "Extreme Heat Days":
-            c_ehd1, c_ehd2 = st.columns(2)
-            with c_ehd1:
-                # [UPDATE] Label updated to imply raw, standardization happens internally
-                pred_inputs['HVI_Score'] = st.number_input("EHD-HVI (Raw Value)", format="%.4f")
-            with c_ehd2:
-                pred_inputs['City'] = st.text_input("City Name (English)")
+        if uploaded_file:
+            try:
+                xl = pd.ExcelFile(uploaded_file)
+                sheet_names = xl.sheet_names
                 
-        else: # Organizational Vulnerability Index
-            c_ovi1, c_ovi2 = st.columns(2)
-            c_ovi3, c_ovi4 = st.columns(2)
-            with c_ovi1:
-                pred_inputs['HVI_Score'] = st.number_input("Traditional HVI (Raw Value)", format="%.4f")
-            with c_ovi2:
-                pred_inputs['EHD'] = st.number_input("Extreme Heat Days (Int)", min_value=0, step=1, format="%d")
-            with c_ovi3:
-                pred_inputs['OVI'] = st.number_input("Organizational Vulnerability Index", format="%.4f")
-            with c_ovi4:
-                pred_inputs['City'] = st.text_input("City Name (English)")
-
-        # [UPDATED] Map Logic with Global Geocoding Support
-        # Default coords dictionary (Fallback)
-        city_coords = {
-            "Kuala Lumpur": {"lat": 3.1390, "lon": 101.6869},
-            "Penang": {"lat": 5.4141, "lon": 100.3288},
-            "George Town": {"lat": 5.4141, "lon": 100.3288},
-            "Johor Bahru": {"lat": 1.4927, "lon": 103.7414}
-        }
-
-        map_center = {"lat": 3.1390, "lon": 101.6869} # Default KL
-        map_zoom = 10
-        target_city = pred_inputs.get('City', '').strip()
-        
-        if target_city:
-            # 1. Check hardcoded dict first (Faster)
-            found = False
-            for k, v in city_coords.items():
-                if k.lower() == target_city.lower():
-                    map_center = v
-                    found = True
-                    break
-            
-            # 2. If not found, use Geopy to search globally
-            if not found:
-                try:
-                    geolocator = Nominatim(user_agent="heat_dashboard_app")
-                    location = geolocator.geocode(target_city, timeout=5)
-                    if location:
-                        map_center = {"lat": location.latitude, "lon": location.longitude}
-                        found = True
-                        st.caption(f"📍 Found location via Geocoder: {location.address}")
+                final_df = pd.DataFrame()
+                valid_upload = False
+                
+                # --- LOGIC FOR FUNCTION 1 (Multi-City) ---
+                if analysis_mode.startswith("Function 1"):
+                    if len(sheet_names) < 3:
+                        st.error("❌ Comparison requires at least 3 cities (sheets).")
                     else:
-                        st.caption(f"⚠️ City '{target_city}' not found globally. Map remaining at default.")
-                except Exception as e:
-                    st.caption(f"⚠️ Geocoding service error: {e}. Map remaining at default.")
+                        dfs = []
+                        ref_columns = None
+                        error_flag = False
+                        
+                        for sheet in sheet_names:
+                            df_sheet = xl.parse(sheet)
+                            # Basic Column Check
+                            if ref_columns is None:
+                                ref_columns = list(df_sheet.columns)
+                            elif list(df_sheet.columns) != ref_columns:
+                                st.error(f"❌ Column mismatch in sheet '{sheet}'. All sheets must have identical structure.")
+                                error_flag = True
+                                break
+                            
+                            # Specific Column Check
+                            req_cols = ['EHD'] if "Extreme" in model_type else ['EHD', 'OVI']
+                            if not all(c in df_sheet.columns for c in req_cols):
+                                st.error(f"❌ Missing required columns {req_cols} in sheet '{sheet}'.")
+                                error_flag = True
+                                break
+                            
+                            # Add City Identifier (Sheet Name or Column)
+                            if 'city' not in df_sheet.columns:
+                                df_sheet['city'] = sheet
+                            
+                            df_sheet['sheet_name'] = sheet
+                            dfs.append(df_sheet)
+                            
+                        if not error_flag:
+                            final_df = pd.concat(dfs, ignore_index=True)
+                            valid_upload = True
 
-            if found and not 'location' in locals(): # Just to show caption for dict hits
-                st.caption(f"📍 Map centered on {target_city} (Database)")
-
-        st.markdown(f"**Map Visualization: {target_city if target_city else 'Kuala Lumpur'}**")
-        map_df = pd.DataFrame([{'lat': map_center['lat'], 'lon': map_center['lon'], 'City': target_city if target_city else "Kuala Lumpur"}])
-        fig_city_map = px.scatter_mapbox(map_df, lat='lat', lon='lon', hover_name='City', zoom=map_zoom, height=300)
-        fig_city_map.update_layout(mapbox_style="carto-positron", margin={"r":0,"t":0,"l":0,"b":0})
-        st.plotly_chart(fig_city_map, use_container_width=True)
-
-        # 5. Calculate Button for Mortality & Risk
-        if st.button("Predict Mortality & Risk Level"):
-            mortality_pred = None
-            
-            # --- [UPDATED] Standardization Logic ---
-            # Retrieve HVI statistics from the loaded dataset (df)
-            if 'HVI_Score' in df.columns:
-                hvi_mean = df['HVI_Score'].mean()
-                hvi_std = df['HVI_Score'].std()
-            else:
-                hvi_mean, hvi_std = 0, 1 # Fallback, though unlikely if csv loaded
-            
-            # Standardize HVI Input
-            # Formula: Z = (X - mean) / std
-            raw_hvi = pred_inputs.get('HVI_Score', 0)
-            if hvi_std != 0:
-                hvi_std_val = (raw_hvi - hvi_mean) / hvi_std
-            else:
-                hvi_std_val = raw_hvi
-            
-            # Note for EHD/OVI:
-            # Since 'EHD' and 'OVI' columns do not exist in risk_assessment_final.csv,
-            # we cannot calculate their mean/std for standardization.
-            # We will use the raw values but warn the user. 
-            # Ideally, these should also be standardized if the training data was.
-            
-            st.info(f"ℹ️ Input Processing: HVI standardized (Raw: {raw_hvi} -> Std: {hvi_std_val:.4f}) based on historical data.")
-            if analysis_type == "Organizational Vulnerability Index":
-                st.caption("Note: EHD and OVI inputs are passed without standardization as reference statistics are unavailable in current dataset.")
-
-            # --- Prediction Logic (Updated for Custom Classes) ---
-            if analysis_type == "Extreme Heat Days":
-                if article_models['article5']:
-                    try:
-                        # Article 5 (NB2Predictor) uses: .predict(hvi_value=...)
-                        # Use STANDARDIZED HVI
-                        mortality_pred = article_models['article5'].predict(hvi_value=hvi_std_val)
-                    except Exception as e:
-                        st.error(f"Prediction Error (Article 5 Model): {e}")
+                # --- LOGIC FOR FUNCTION 2 (Single City Time Series) ---
                 else:
-                    st.error("Article 5 Model (article5_predictor.pkl) failed to load.")
-            
-            else: # OVI
-                if article_models['article6']:
-                    try:
-                        # Article 6 (SimplePredictor) uses: .predict(EHD=, HVI_Score=, OVI=)
-                        # Use STANDARDIZED HVI
-                        mortality_pred = article_models['article6'].predict(
-                            EHD=pred_inputs['EHD'], 
-                            HVI_Score=hvi_std_val, 
-                            OVI=pred_inputs['OVI']
+                    if len(sheet_names) < 1: st.error("File is empty.")
+                    else:
+                        # Only take first sheet
+                        df_sheet = xl.parse(sheet_names[0])
+                        target_city = sheet_names[0] # Default city name is sheet name
+                        
+                        # Check Columns
+                        req_cols = ['date', 'nighttime_light', 'population']
+                        extra_req = ['EHD'] if "Extreme" in model_type else ['EHD', 'OVI']
+                        req_cols.extend(extra_req)
+                        
+                        if not all(c in df_sheet.columns for c in req_cols):
+                            st.error(f"❌ Missing columns. Required: {req_cols}")
+                        else:
+                            if 'city' not in df_sheet.columns:
+                                df_sheet['city'] = target_city
+                            final_df = df_sheet
+                            valid_upload = True
+                
+                # --- PROCESSING & VISUALIZATION ---
+                if valid_upload:
+                    st.success("✅ Data validated successfully. Processing...")
+                    
+                    # 1. Seasonality Adjustment (Only for Function 2)
+                    apply_seas = False
+                    if analysis_mode.startswith("Function 2"):
+                        with st.spinner("Calculating Seasonality & Dynamic Population..."):
+                            final_df = calculate_seasonality_adjustment(final_df)
+                            apply_seas = True
+                    
+                    # 2. HVI Calculation (Normalization -> PCA/Equal -> Dynamic)
+                    with st.spinner("Standardizing & Calculating HVI..."):
+                        final_df, feature_cols = process_hvi_calculation(final_df, model_type, apply_seasonality=apply_seas)
+                    
+                    # 3. Risk Scoring & Leveling (Comparison against uploaded peers)
+                    with st.spinner("Predicting Mortality & Assessing Risk Levels..."):
+                        final_df = calculate_risk_score_and_level(final_df, model_type)
+                    
+                    # 4. Display Results
+                    st.subheader("📊 Analysis Results")
+                    
+                    # Display Table
+                    display_cols = ['city', 'HVI_Final', 'Predicted_Mortality', 'Risk_Score', 'Risk_Level']
+                    if 'date' in final_df.columns: display_cols.insert(1, 'date')
+                    if 'Pw_i' in final_df.columns: display_cols.insert(2, 'Pw_i')
+                    
+                    st.dataframe(final_df[display_cols].style.applymap(
+                        lambda x: f"color: {'red' if x=='RED' else 'orange' if x=='ORANGE' else '#9B870C' if x=='YELLOW' else 'green'}", 
+                        subset=['Risk_Level']
+                    ))
+                    
+                    # 5. Map Visualization
+                    st.subheader("🗺️ Risk Map")
+                    
+                    # Geocoding
+                    lat_list = []
+                    lon_list = []
+                    
+                    # Cache geocoding
+                    coords_cache = {}
+                    
+                    with st.spinner("Looking up city coordinates..."):
+                        for city in final_df['city']:
+                            if city not in coords_cache:
+                                lat, lon = get_coords(city)
+                                coords_cache[city] = (lat, lon)
+                            lat_list.append(coords_cache[city][0])
+                            lon_list.append(coords_cache[city][1])
+                        
+                    final_df['lat'] = lat_list
+                    final_df['lon'] = lon_list
+                    
+                    # Filter out un-geocoded cities
+                    map_df = final_df.dropna(subset=['lat', 'lon'])
+                    
+                    if not map_df.empty:
+                        fig_new_map = px.scatter_mapbox(
+                            map_df, lat='lat', lon='lon', 
+                            color='Risk_Level',
+                            hover_name='city',
+                            hover_data={'Predicted_Mortality':':.2f', 'HVI_Final':':.2f', 'Risk_Score':':.2f'},
+                            color_discrete_map={'RED':'red', 'ORANGE':'orange', 'YELLOW':'gold', 'GREEN':'green'},
+                            zoom=3, height=500
                         )
-                    except Exception as e:
-                        st.error(f"Prediction Error (Article 6 Model): {e}")
-                else:
-                    st.error("Article 6 Model (article6_predictor.pkl) failed to load.")
-            
-            # --- Risk Level Calculation Logic (Adapted) ---
-            if mortality_pred is not None:
-                st.subheader("Prediction Results")
-                st.metric("Predicted Mortality", f"{mortality_pred:.4f}")
-                
-                baseline_mortality = df['predicted_outcome']
-                q90 = baseline_mortality.quantile(0.9)
-                q75 = baseline_mortality.quantile(0.75)
-                q50 = baseline_mortality.quantile(0.5)
-                
-                # Debug info to understand why risk level is chosen
-                with st.expander("Show Risk Threshold Details"):
-                    st.write(f"Thresholds (from historical data): Q90={q90:.2f}, Q75={q75:.2f}, Q50={q50:.2f}")
-                    st.write(f"Your Prediction: {mortality_pred:.2f}")
-                
-                risk_level_final = "GREEN"
-                if mortality_pred > q90:
-                    risk_level_final = "RED"
-                elif mortality_pred > q75:
-                    risk_level_final = "ORANGE"
-                elif mortality_pred > q50:
-                    risk_level_final = "YELLOW"
-                
-                color_map = {"RED": "red", "ORANGE": "orange", "YELLOW": "#FFD700", "GREEN": "green"}
-                st.markdown(f"### Heat Risk Level: <span style='color:{color_map[risk_level_final]}'>{risk_level_final}</span>", unsafe_allow_html=True)
-                
-                if risk_level_final == "RED":
-                    st.error(f"🚨 CRITICAL ALERT for {target_city}: High expected mortality. Initiate Emergency Protocol.")
-                elif risk_level_final == "ORANGE":
-                    st.warning(f"⚠️ WARNING for {target_city}: Elevated risk. Alert vulnerable organizations.")
-                elif risk_level_final == "YELLOW":
-                    st.warning(f"✋ ADVISORY for {target_city}: Moderate risk detected.")
-                else:
-                    st.success(f"✅ CLEAR: Normal risk levels for {target_city}.")
+                        fig_new_map.update_layout(mapbox_style="carto-positron")
+                        st.plotly_chart(fig_new_map, use_container_width=True)
+                    else:
+                        st.warning("Could not find coordinates for the provided cities. Map cannot be displayed.")
 
+            except Exception as e:
+                st.error(f"Error processing file: {e}")
+
+    # =========================================================================
+    # TAB 2: District Deep Dive
+    # =========================================================================
     elif st.session_state.active_tab == "🔬 District Deep Dive & Simulator":
         st.header(f"Detailed Analysis for: {selected_district}")
         district_data = df[df['district_id'] == selected_district].iloc[0]
@@ -592,6 +672,9 @@ if df is not None and geojson is not None:
                             delta=f"{simulated_outcome - original_outcome:.2f}")
             st.success("The 'delta' shows the predicted change. A negative value indicates a successful intervention.")
 
+    # =========================================================================
+    # TAB 3: Risk Deconstruction
+    # =========================================================================
     elif st.session_state.active_tab == "📊 Risk Deconstruction":
         st.header("📊 Risk Deconstruction: Vulnerability vs. Exposure")
         st.info(
@@ -602,6 +685,12 @@ if df is not None and geojson is not None:
             """
         )
         if 'exposure_score' in df_filtered.columns:
+            min_score, max_score = df['risk_factor_score'].min(), df['risk_factor_score'].max()
+            if (max_score - min_score) != 0:
+                df_filtered['risk_score_for_size'] = 5 + ((df_filtered['risk_factor_score'] - min_score) / (max_score - min_score)) * 45
+            else:
+                df_filtered['risk_score_for_size'] = 20
+
             fig_scatter = px.scatter(
                 df_filtered, x='HVI_Score', y='exposure_score', color='risk_level',
                 size='risk_score_for_size', hover_name='district_id',
@@ -620,6 +709,9 @@ if df is not None and geojson is not None:
         else:
             st.warning("Could not create exposure score. 'UTCI_mean' or 'PM25_mean' columns might be missing from the source data.")
 
+    # =========================================================================
+    # TAB 4: On-Demand Prediction
+    # =========================================================================
     elif st.session_state.active_tab == "🕹️ On-Demand Prediction":
         st.header("🕹️ On-Demand Prediction for a New Scenario")
         
@@ -657,7 +749,6 @@ if df is not None and geojson is not None:
                     with st.spinner("🤖 Calling AI model for prediction..."):
                         predicted_outcome = risk_model.predict(input_data)[0]
                         
-                        # --- [NEW] Use Enhanced Override Logic (Equation 1) ---
                         risk_color, risk_label = assign_risk_level_enhanced(predicted_outcome, prediction_thresholds, utci_input)
                         
                         st.metric(label="Predicted Health Risk Outcome", value=f"{predicted_outcome:.2f}")
@@ -668,11 +759,9 @@ if df is not None and geojson is not None:
                         elif risk_color == "YELLOW": st.warning(f"**Caution: {risk_label}**")
                         else: st.success(f"**Assessment Clear: {risk_label}**")
 
-                        # --- [NEW] Statistical Anomaly Detection (Equation 2) ---
                         if abs(predicted_outcome - hist_mean) > (3 * hist_std):
                             st.error(f"⚠️ **Anomaly Detected (Needs Human Assistance)**: Prediction deviates >3σ from historical mean.")
                         
-                        # --- [NEW] Tiered Alert Dissemination Protocol ---
                         st.markdown("### 📡 Active Dissemination Protocol")
                         with st.expander(f"View Communication Strategy for {risk_color} Level", expanded=True):
                             if risk_color == "RED":
@@ -698,16 +787,13 @@ if df is not None and geojson is not None:
 
                     st.markdown("---")
                     
-                    if not API_AVAILABLE:
-                        st.error("Gemini API not configured, cannot generate policy recommendations.")
-                    else:
+                    if API_AVAILABLE:
                         with st.spinner("🧠 Gemini is generating policy recommendations..."):
                             prompt = f"""
                             You are an expert public health advisor. Provide recommendations for {district_name_input}.
                             Data: Risk Level: {risk_label}, Outcome: {predicted_outcome:.2f}
                             Factors: HVI: {hvi_input}, UTCI: {utci_input}, PM2.5: {pm25_input}
                             """
-                            # (Simplified prompt for brevity in this snippet)
                             try:
                                 model = genai.GenerativeModel('gemini-2.5-flash')
                                 response = model.generate_content(prompt)
@@ -715,7 +801,12 @@ if df is not None and geojson is not None:
                                 st.markdown(response.text)
                             except Exception as e:
                                 st.error(f"Gemini API Error: {e}")
+                    else:
+                        st.error("Gemini API not configured.")
 
+    # =========================================================================
+    # TAB 5: AI Policy Advisor
+    # =========================================================================
     elif st.session_state.active_tab == "🤖 AI Policy Advisor":
         st.header(f"🤖 AI-Powered Policy Advisor for {selected_district}")
         if not API_AVAILABLE:
