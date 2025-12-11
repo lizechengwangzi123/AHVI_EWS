@@ -364,6 +364,12 @@ def assign_risk_level_enhanced(predicted_outcome, thresholds, utci_val):
     return "GREEN", "Low Risk"
 
 # --- Main App Logic ---
+# [REQ] Update Header Information
+st.title("🔬 AHVI+ Early Warning System")
+st.markdown("**by Zecheng Li 李泽城 23053789 Universiti Malaya**")
+st.markdown("*AI powered by Gemini*")
+st.markdown("---")
+
 df, geojson = load_data("risk_assessment_final.csv", "malaysia_states.json")
 
 # --- Sidebar ---
@@ -503,7 +509,9 @@ if df is not None and geojson is not None:
                         error_flag = False
                         
                         for sheet in sheet_names:
-                            df_sheet = xl.parse(sheet)
+                            # [REQ] Function 1: Read ONLY the first row
+                            df_sheet = xl.parse(sheet, nrows=1)
+                            
                             # Basic Column Check
                             if ref_columns is None:
                                 ref_columns = list(df_sheet.columns)
@@ -570,18 +578,7 @@ if df is not None and geojson is not None:
                     with st.spinner("Predicting Mortality & Assessing Risk Levels..."):
                         final_df = calculate_risk_score_and_level(final_df, model_type)
                     
-                    # 4. Display Results
-                    st.subheader("📊 Analysis Results")
-                    
-                    # Display Table
-                    display_cols = ['city', 'HVI_Final', 'Predicted_Mortality', 'Risk_Score', 'Risk_Level']
-                    if 'date' in final_df.columns: display_cols.insert(1, 'date')
-                    if 'Pw_i' in final_df.columns: display_cols.insert(2, 'Pw_i')
-                    
-                    st.dataframe(final_df[display_cols].style.applymap(
-                        lambda x: f"color: {'red' if x=='RED' else 'orange' if x=='ORANGE' else '#9B870C' if x=='YELLOW' else 'green'}", 
-                        subset=['Risk_Level']
-                    ))
+                    # [REQ] Delete "Analysis Results" Table - Removed here.
                     
                     # 5. Map Visualization
                     st.subheader("🗺️ Risk Map")
@@ -589,8 +586,6 @@ if df is not None and geojson is not None:
                     # Geocoding
                     lat_list = []
                     lon_list = []
-                    
-                    # Cache geocoding
                     coords_cache = {}
                     
                     with st.spinner("Looking up city coordinates..."):
@@ -607,9 +602,23 @@ if df is not None and geojson is not None:
                     # Filter out un-geocoded cities
                     map_df = final_df.dropna(subset=['lat', 'lon'])
                     
-                    if not map_df.empty:
+                    # [REQ] Function 2 Slider Logic
+                    plot_df = map_df.copy()
+                    
+                    if analysis_mode.startswith("Function 2"):
+                        if 'date' in map_df.columns:
+                            # Create readable string for slider
+                            map_df['date_str'] = map_df['date'].dt.strftime('%Y-%m')
+                            available_dates = sorted(map_df['date_str'].unique())
+                            
+                            if available_dates:
+                                selected_date = st.select_slider("Select Time Period:", options=available_dates)
+                                plot_df = map_df[map_df['date_str'] == selected_date]
+                                st.caption(f"Showing Heat Risk Level for: {selected_date}")
+
+                    if not plot_df.empty:
                         fig_new_map = px.scatter_mapbox(
-                            map_df, lat='lat', lon='lon', 
+                            plot_df, lat='lat', lon='lon', 
                             color='Risk_Level',
                             hover_name='city',
                             hover_data={'Predicted_Mortality':':.2f', 'HVI_Final':':.2f', 'Risk_Score':':.2f'},
