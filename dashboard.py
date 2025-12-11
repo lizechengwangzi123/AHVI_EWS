@@ -270,7 +270,6 @@ def calculate_risk_score_and_level(df, analysis_mode):
                 # Article 6 (Simple): input EHD, HVI, OVI
                 pred_val = model.predict(EHD=ehd_val, HVI_Score=hvi_val, OVI=ovi_val)
         except Exception as e:
-            # st.warning(f"Error predicting row {idx}: {e}")
             pred_val = 0
             
         preds.append(pred_val)
@@ -284,7 +283,6 @@ def calculate_risk_score_and_level(df, analysis_mode):
     if 'OVI' in df.columns: drivers.append('OVI')
     
     # Eq 1: Standardize drivers (Z_ij) relative to THIS dataset
-    # (对比这几个城市或这几个月的数据)
     scaler_risk = StandardScaler()
     X_drivers = df[drivers].fillna(0)
     
@@ -294,7 +292,7 @@ def calculate_risk_score_and_level(df, analysis_mode):
         z_scores = np.zeros(X_drivers.shape) # Only 1 row, Z is 0
     
     # Eq 2: Weights 
-    # 简单起见，假设各因子权重相等 (因为很难动态获取 pickle 模型的内部系数)
+    # 简单起见，假设各因子权重相等
     n_drivers = len(drivers)
     weights = np.ones(n_drivers) / n_drivers # w_j = 1/n
     
@@ -384,6 +382,12 @@ if df is not None:
     df['district_id'] = df['district_id'].replace(name_mapping)
     df = df.sort_values(by="risk_factor_score", ascending=False).reset_index(drop=True)
     
+    # [CRITICAL FIX] Re-add Exposure Score Calculation for Tab 3
+    if 'UTCI_mean' in df.columns and 'PM25_mean' in df.columns:
+        df['exposure_score'] = (df['UTCI_mean'] - df['UTCI_mean'].mean()) / df['UTCI_mean'].std() + \
+                               (df['PM25_mean'] - df['PM25_mean'].mean()) / df['PM25_mean'].std() + \
+                               (df['O3_q95'] - df['O3_q95'].mean()) / df['O3_q95'].std()
+
     # Pre-calc thresholds for On-Demand Tab
     if 'predicted_outcome' in df.columns:
         prediction_thresholds = df['predicted_outcome'].quantile([0.5, 0.75, 0.9]).to_dict()
