@@ -1,6 +1,6 @@
 streamlit
 pandas
-plotly
+plotly>=5.24
 google-generativeai
 joblib
 numpy

@@ -469,12 +469,14 @@ if df is not None and geojson is not None:
         
         st.markdown("---")
         st.header("Geographic Risk Distribution Map")
-        fig_map = px.choropleth_mapbox(df_filtered, geojson=geojson, locations='district_id',
-                                       featureidkey="properties.NAME_1", color='risk_factor_score',
-                                       color_continuous_scale="Reds", mapbox_style="carto-positron",
-                                       zoom=5.5, center={"lat": 4.2105, "lon": 108.27},
-                                       opacity=0.6, hover_name='district_id',
-                                       hover_data={'risk_level': True, 'risk_factor_score': ':.2f'})
+        fig_map = px.choropleth_map(
+            df_filtered, geojson=geojson, locations='district_id',
+            featureidkey="properties.NAME_1", color='risk_factor_score',
+            color_continuous_scale="Reds", map_style="carto-positron",
+            zoom=5.5, center={"lat": 4.2105, "lon": 108.27},
+            opacity=0.6, hover_name='district_id',
+            hover_data={'risk_level': True, 'risk_factor_score': ':.2f'},
+        )
         fig_map.update_layout(margin={"r":0,"t":0,"l":0,"b":0})
         st.plotly_chart(fig_map, use_container_width=True)
 
@@ -622,15 +624,14 @@ if df is not None and geojson is not None:
                                 st.caption(f"Showing Heat Risk Level for: **{selected_date}**")
 
                     if not plot_df.empty:
-                        fig_new_map = px.scatter_mapbox(
+                        fig_new_map = px.scatter_map(
                             plot_df, lat='lat', lon='lon', 
                             color='Risk_Level',
                             hover_name='city',
                             hover_data={'Predicted_Mortality':':.2f', 'HVI_Final':':.2f', 'Risk_Score':':.2f'},
                             color_discrete_map={'RED':'red', 'ORANGE':'orange', 'YELLOW':'gold', 'GREEN':'green'},
-                            zoom=3, height=500
+                            zoom=3, height=500, map_style="carto-positron"
                         )
-                        fig_new_map.update_layout(mapbox_style="carto-positron")
                         st.plotly_chart(fig_new_map, use_container_width=True)
                     else:
                         st.warning("Could not find coordinates for the provided cities. Map cannot be displayed.")
